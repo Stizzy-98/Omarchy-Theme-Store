@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""Fetch and cache the Omarchy community theme catalog from omarchy.org/themes/.
+
+Prints a JSON array of {slug, name, repoUrl, thumbnailPath} to stdout, where
+thumbnailPath is a local file already cached on disk. Caches the parsed
+catalog and thumbnails under ~/.cache/omarchy/theme-store/ and reuses them
+until OMARCHY_THEME_STORE_TTL seconds have passed (default 24h) or --force
+is passed. If a refresh fails but a cache exists (even stale), the stale
+cache is served rather than leaving the caller with nothing.
+"""
+
+import html
+import json
+import os
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
+
+SOURCE_URL = "https://omarchy.org/themes/"
+SOURCE_ORIGIN = "https://omarchy.org"
+CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "omarchy", "theme-store")
+THUMB_DIR = os.path.join(CACHE_DIR, "thumbs")
+CATALOG_PATH = os.path.join(CACHE_DIR, "catalog.json")
+TTL_SECONDS = int(os.environ.get("OMARCHY_THEME_STORE_TTL", 24 * 60 * 60))
+USER_AGENT = "omarchy-theme-store/0.1 (+https://github.com/stizzy-98/Omarchy-Theme-Store)"
+
+# Matches the exact static markup omarchy.org/themes/ ships today:
+#   <figure class="themes__theme">
+#     <a href="REPO"><img src="/assets/themes/SLUG.webp" ...></a>
+#     <figcaption><a href="REPO">NAME</a></figcaption>
+#   </figure>
+FIGURE_RE = re.compile(
+    r'<figure class="themes__theme">\s*'
+    r'<a href="(?P<repo>[^"]+)"><img src="(?P<thumb>[^"]+)"[^>]*></a>\s*'
+    r'<figcaption><a href="[^"]+">(?P<name>[^<]+)</a></figcaption>\s*'
+    r'</figure>',
+    re.DOTALL,
+)
+
+
+def fetch_url(url, timeout=20):
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
+
+def parse_catalog(page_html):
+    entries = []
+    for m in FIGURE_RE.finditer(page_html):
+        thumb = m.group("thumb")
+        slug = os.path.splitext(os.path.basename(thumb))[0]
+        thumb_url = thumb if thumb.startswith("http") else (SOURCE_ORIGIN + thumb)
+        entries.append({
+            "slug": slug,
+            "name": html.unescape(m.group("name")).strip(),
+            "repoUrl": html.unescape(m.group("repo")).strip(),
+            "thumbnailUrl": thumb_url,
+        })
+    return entries
+
+
+def ensure_thumbnail(entry):
+    slug = entry["slug"]
+    ext = os.path.splitext(entry["thumbnailUrl"])[1] or ".webp"
+    dest = os.path.join(THUMB_DIR, slug + ext)
+    if os.path.exists(dest):
+        return dest
+    try:
+        data = fetch_url(entry["thumbnailUrl"])
+        tmp = dest + ".tmp"
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, dest)
+        return dest
+    except (urllib.error.URLError, OSError) as exc:
+        print(f"warn: failed to cache thumbnail for {slug}: {exc}", file=sys.stderr)
+        return ""
+
+
+def refresh():
+    os.makedirs(THUMB_DIR, exist_ok=True)
+    page = fetch_url(SOURCE_URL).decode("utf-8", "replace")
+    entries = parse_catalog(page)
+    if not entries:
+        raise RuntimeError("no themes parsed from omarchy.org/themes/ (page layout may have changed)")
+
+    catalog = []
+    for entry in entries:
+        catalog.append({
+            "slug": entry["slug"],
+            "name": entry["name"],
+            "repoUrl": entry["repoUrl"],
+            "thumbnailPath": ensure_thumbnail(entry),
+        })
+
+    catalog.sort(key=lambda t: t["name"].lower())
+
+    tmp = CATALOG_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({"fetchedAt": int(time.time()), "themes": catalog}, f)
+    os.replace(tmp, CATALOG_PATH)
+    return catalog
+
+
+def load_cached():
+    with open(CATALOG_PATH) as f:
+        data = json.load(f)
+    return data.get("themes", []), data.get("fetchedAt", 0)
+
+
+def main():
+    force = "--force" in sys.argv[1:]
+    os.makedirs(CACHE_DIR, exist_ok=True)
+
+    if not force and os.path.exists(CATALOG_PATH):
+        try:
+            themes, fetched_at = load_cached()
+            if themes and (time.time() - fetched_at) < TTL_SECONDS:
+                print(json.dumps(themes))
+                return
+        except (OSError, ValueError):
+            pass
+
+    try:
+        themes = refresh()
+    except Exception as exc:
+        if os.path.exists(CATALOG_PATH):
+            print(f"warn: refresh failed ({exc}); serving cached catalog", file=sys.stderr)
+            themes, _ = load_cached()
+            print(json.dumps(themes))
+            return
+        print(f"error: {exc}", file=sys.stderr)
+        print("[]")
+        sys.exit(1)
+
+    print(json.dumps(themes))
+
+
+if __name__ == "__main__":
+    main()
