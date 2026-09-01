@@ -1,64 +1,68 @@
 # Omarchy Theme Store
 
 A Quickshell plugin for [Omarchy](https://omarchy.org) that turns
-[omarchy.org/themes](https://omarchy.org/themes/) into a fullscreen gallery
-inside the Omarchy menu: `Super + Space` → `Install` → `Omarchy Theme Store`.
-
-- Browse every community theme as thumbnail cards, filter by typing.
-- Press `Enter` on a theme to see a full-size preview with **Back** and
-  **Install** buttons.
-- **Install** opens a floating terminal that runs `omarchy-theme-install
-  <repo-url>` — Omarchy's own theme installer.
+[omarchy.org/themes](https://omarchy.org/themes/) into a fullscreen gallery to remove all the annoying extra steps that go into installing themes in Omarchy's current state.
 
 ## How it works
 
 - `bin/omarchy-theme-store-fetch` scrapes omarchy.org/themes/ (it's static
   HTML, no API) and caches the parsed catalog + thumbnails under
-  `~/.cache/omarchy/theme-store/`, refreshing at most once every 24h
+  `~/.cache/omarchy/theme-store/`, refreshing at minimum once every 24h
   (`OMARCHY_THEME_STORE_TTL` env var to change that) unless a stale cache is
   all that's available.
-- `ThemeStore.qml` / `ThemeStoreModel.js` are the plugin itself: a
-  Quickshell `overlay` plugin (see `manifest.json`) built the same way as
-  Omarchy's first-party `image-picker` and `reminders` plugins.
-- Installing a theme just shells out to the same `omarchy-theme-install`
-  script the built-in `Install > Style > Theme` menu item uses, so removal
-  (`Remove > Theme`) and theme-switching behave exactly as they already do.
+- `ThemeStore.qml` / `ThemeStoreModel.js` is the plugin itself: a
+  Quickshell `overlay` plugin see `manifest.json` for more.
+- Installing a theme opens a shell the same way `omarchy-theme-install`
+  script does `Install > Style > Theme` removal (`Remove > Theme`) and theme-switching behave exactly the same.
 
 ## Install
 
 ```sh
-./scripts/install.sh
+omarchy plugin add https://github.com/stizzy-98/Omarchy-Theme-Store.git --enable
 ```
 
-This symlinks the repo into `~/.config/omarchy/plugins/community.theme-store`,
-adds an `install.theme-store` entry to
-`~/.config/omarchy/extensions/omarchy-menu.jsonc`, and asks the running
-`omarchy-shell` to rescan and enable it. Re-running it is safe.
+Using omarchy's own plugin installer — it clones the repo straight into
+`~/.config/omarchy/plugins/community.theme-store`, validates and enables it.
+The first time it loads it registers its own "Super + Space > Install > Omarchy Theme Store"
+menu entry. Running the same
 
-The entry lands at the bottom of the `Install` list — the extensions file's
-merge order is "all default items, then all extension items," with no
-`after`/`index`/`priority` field, so a new id can't be inserted between two
-existing rows. The only way to place it elsewhere is editing the
-package-owned `/usr/share/omarchy/default/omarchy/omarchy-menu.jsonc`
-directly, which `omarchy update` will silently revert.
+## Use
+
+inside the Omarchy menu: `Super + Space` → `Install` → `Omarchy Theme Store`.
+- Browse every community theme as thumbnail cards.
+- Filter for specific theme names by typing.
+- Press ctrl + r to refresh gallery.
+- Press `Enter` on a theme to see a full-size preview with 'Back' and 'Install' buttons. 
+
+## Updating
+Run: omarchy plugin update community.theme-store
 
 ## Uninstall
+ ```sh
+
+omarchy plugin remove community.theme-store
+ ```
+
+That removes the plugin itself to remove menu entry run:
 
 ```sh
-./scripts/uninstall.sh          # remove the plugin + menu entry
+./scripts/uninstall.sh          # remove the leftover menu entry
 ./scripts/uninstall.sh --purge-cache   # also delete the cached catalog/thumbnails
 ```
 
 ## Development
 
-Edits to `ThemeStore.qml` take effect on the next summon — no rebuild step.
-After changing `manifest.json` or adding/removing files, run:
+`manifest.json` declares `keepLoaded: true`, so once the shell has loaded the
+plugin it stays resident in memory — `omarchy-shell shell rescanPlugins` only
+picks up newly added/removed plugins and manifest changes, it does not
+re-read an already-loaded plugin's QML. To pick up edits to `ThemeStore.qml`
+or `ThemeStoreModel.js` in a session where the plugin is already running:
 
 ```sh
-omarchy-shell shell rescanPlugins
+omarchy restart shell
 ```
 
-Summon it directly for testing without going through the menu:
+## Using only CLI instead of the Menu:
 
 ```sh
 omarchy-shell shell summon community.theme-store '{}'

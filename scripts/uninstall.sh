@@ -13,6 +13,9 @@ CACHE_DIR="$HOME/.cache/omarchy/theme-store"
 if [[ -L $PLUGIN_LINK ]]; then
   rm "$PLUGIN_LINK"
   echo "Removed $PLUGIN_LINK"
+elif [[ -e $PLUGIN_LINK ]]; then
+  echo "$PLUGIN_LINK is a real directory (installed via 'omarchy plugin add')."
+  echo "This only cleans up the menu entry/cache — run 'omarchy plugin remove $PLUGIN_ID' too."
 else
   echo "$PLUGIN_LINK not found (already removed?)"
 fi

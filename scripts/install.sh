@@ -8,9 +8,6 @@ PLUGIN_ID="community.theme-store"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PLUGINS_HOME="$HOME/.config/omarchy/plugins"
 PLUGIN_LINK="$PLUGINS_HOME/$PLUGIN_ID"
-MENU_EXT="$HOME/.config/omarchy/extensions/omarchy-menu.jsonc"
-MENU_ENTRY_ID="install.theme-store"
-MENU_ENTRY="  \"$MENU_ENTRY_ID\": {\"icon\":\"󰸌\",\"label\":\"Omarchy Theme Store\",\"action\":\"omarchy-shell shell summon $PLUGIN_ID '{}'\"},"
 
 fail() {
   echo "install.sh: $*" >&2
@@ -28,24 +25,7 @@ fi
 ln -s "$REPO_DIR" "$PLUGIN_LINK"
 echo "Linked $PLUGIN_LINK -> $REPO_DIR"
 
-mkdir -p "$(dirname "$MENU_EXT")"
-[[ -f $MENU_EXT ]] || printf '{\n}\n' > "$MENU_EXT"
-
-if grep -q "\"$MENU_ENTRY_ID\"" "$MENU_EXT"; then
-  echo "Menu entry '$MENU_ENTRY_ID' already present in $MENU_EXT"
-else
-  awk -v entry="$MENU_ENTRY" '
-    { lines[NR] = $0 }
-    END {
-      for (i = 1; i <= NR; i++) {
-        if (i == NR) print entry
-        print lines[i]
-      }
-    }
-  ' "$MENU_EXT" > "$MENU_EXT.tmp"
-  mv "$MENU_EXT.tmp" "$MENU_EXT"
-  echo "Added '$MENU_ENTRY_ID' to $MENU_EXT"
-fi
+"$REPO_DIR/bin/omarchy-theme-store-ensure-menu-entry"
 
 omarchy-shell shell rescanPlugins >/dev/null
 

@@ -1,0 +1,42 @@
+#!/bin/bash
+# Idempotently registers "Install > Omarchy Theme Store" in the user's menu
+# extensions and asks the menu to refresh, but only if the entry is missing.
+# Called both by scripts/install.sh (dev/symlink checkout) and by
+# ThemeStore.qml on load, so `omarchy plugin add <url> --enable` alone is
+# enough to make the plugin show up in the menu — no extra install step.
+set -euo pipefail
+
+PLUGIN_ID="community.theme-store"
+MENU_EXT="$HOME/.config/omarchy/extensions/omarchy-menu.jsonc"
+MENU_ENTRY_ID="install.theme-store"
+MENU_ENTRY="  \"$MENU_ENTRY_ID\": {\"icon\":\"󰸌\",\"label\":\"Omarchy Theme Store\",\"action\":\"omarchy-shell shell summon $PLUGIN_ID '{}'\"},"
+
+mkdir -p "$(dirname "$MENU_EXT")"
+[[ -f $MENU_EXT ]] || printf '{\n}\n' > "$MENU_EXT"
+
+if grep -q "\"$MENU_ENTRY_ID\"" "$MENU_EXT"; then
+  exit 0
+fi
+
+awk -v entry="$MENU_ENTRY" '
+  { lines[NR] = $0 }
+  END {
+    # The new entry is inserted right before the closing brace, so whatever
+    # was the previous last member needs a trailing comma if it does not
+    # already have one — otherwise two members end up back-to-back with no
+    # separator, which is invalid even under a lenient JSONC parser.
+    last = NR - 1
+    while (last > 0 && lines[last] ~ /^[[:space:]]*$/) last--
+    if (last > 0 && lines[last] !~ /\{[[:space:]]*$/ && lines[last] !~ /,[[:space:]]*$/) {
+      lines[last] = lines[last] ","
+    }
+    for (i = 1; i <= NR; i++) {
+      if (i == NR) print entry
+      print lines[i]
+    }
+  }
+' "$MENU_EXT" > "$MENU_EXT.tmp"
+mv "$MENU_EXT.tmp" "$MENU_EXT"
+echo "Added '$MENU_ENTRY_ID' to $MENU_EXT"
+
+omarchy menu refresh >/dev/null 2>&1 || true

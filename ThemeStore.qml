@@ -42,12 +42,20 @@ Item {
   property var borderSpec: Border.surfaceSpec("menu", "border", border, Math.max(1, Style.space(2)))
   readonly property int cornerRadius: Style.cornerRadius
 
+  Component.onCompleted: {
+    // Makes `omarchy plugin add <url> --enable` a complete install on its own:
+    // the plugin loads once it's enabled (keepLoaded), so this is where the
+    // menu entry gets registered instead of requiring a separate install
+    // script. No-ops instantly if the entry is already there.
+    Util.execArgv([root.scriptPath("omarchy-theme-store-ensure-menu-entry")])
+  }
+
   function open(payloadJson) {
     root.opened = true
     root.view = "gallery"
     root.filterText = ""
     root.errorText = ""
-    if (!root.catalogLoaded) root.loadCatalog(false)
+    root.loadCatalog(true)
     Qt.callLater(function() { root.focusCurrentView() })
   }
 
@@ -187,7 +195,7 @@ Item {
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             visible: root.view === "gallery"
-            text: root.loading ? "Loading…" : (root.filterText ? ("Search: " + root.filterText) : "Type to search · Enter to view · Esc to close")
+            text: root.loading ? "Loading…" : (root.filterText ? ("Search: " + root.filterText) : "Type to search · Enter to view · Esc to close · Ctrl+R to refresh")
             color: Util.alpha(root.foreground, 0.65)
             font.family: Style.font.family
             font.pixelSize: Style.font.bodySmall
