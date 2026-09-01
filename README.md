@@ -1,0 +1,1 @@
+# Omarchy Theme Store Plugin
