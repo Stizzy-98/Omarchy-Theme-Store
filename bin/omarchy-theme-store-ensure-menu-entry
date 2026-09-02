@@ -4,19 +4,42 @@
 # Called both by scripts/install.sh (dev/symlink checkout) and by
 # ThemeStore.qml on load, so `omarchy plugin add <url> --enable` alone is
 # enough to make the plugin show up in the menu — no extra install step.
+#
+# The entry carries its own `when:` guard so it self-hides the moment the
+# plugin folder is gone: `omarchy plugin remove` has no uninstall-hook
+# mechanism to call back into here, so the entry can't be actively deleted
+# on removal, but it stops appearing (and stops trying to summon a plugin
+# that no longer exists) without any extra integration.
 set -euo pipefail
 
-PLUGIN_ID="community.theme-store"
-MENU_EXT="$HOME/.config/omarchy/extensions/omarchy-menu.jsonc"
-MENU_ENTRY_ID="install.theme-store"
-MENU_ENTRY="  \"$MENU_ENTRY_ID\": {\"icon\":\"󰸌\",\"label\":\"Omarchy Theme Store\",\"action\":\"omarchy-shell shell summon $PLUGIN_ID '{}'\"},"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./theme-store-menu-txn.sh
+source "$SCRIPT_DIR/theme-store-menu-txn.sh"
 
-mkdir -p "$(dirname "$MENU_EXT")"
+PLUGIN_ID="community.theme-store"
+MENU_DIR="$HOME/.config/omarchy/extensions"
+MENU_EXT="$MENU_DIR/omarchy-menu.jsonc"
+MENU_ENTRY_ID="install.theme-store"
+
+# The extra backslash pairs (vs. a plain \") are not a typo: this value is
+# handed to awk via -v below, and awk's -v assignment applies its own
+# backslash-escape processing on top of the shell's, collapsing a single
+# \" into a bare " before it ever reaches the JSON output. Doubling the
+# backslash here is what survives both passes intact.
+PLUGIN_GUARD="[[ -d \\\\\"\$HOME/.config/omarchy/plugins/$PLUGIN_ID\\\\\" ]]"
+MENU_ENTRY="  \"$MENU_ENTRY_ID\": {\"icon\":\"󰸌\",\"label\":\"Omarchy Theme Store\",\"when\":\"$PLUGIN_GUARD\",\"action\":\"omarchy-shell shell summon $PLUGIN_ID '{}'\"},"
+
+menu_txn_dir_guard "$MENU_DIR"
+menu_txn_file_guard "$MENU_EXT"
+
 [[ -f $MENU_EXT ]] || printf '{\n}\n' > "$MENU_EXT"
 
-if grep -q "\"$MENU_ENTRY_ID\"" "$MENU_EXT"; then
+if grep -qF "\"$MENU_ENTRY_ID\"" "$MENU_EXT"; then
   exit 0
 fi
+
+work=$(menu_txn_new_tmp "$MENU_DIR")
+trap 'rm -f "$work"' EXIT
 
 awk -v entry="$MENU_ENTRY" '
   { lines[NR] = $0 }
@@ -35,8 +58,10 @@ awk -v entry="$MENU_ENTRY" '
       print lines[i]
     }
   }
-' "$MENU_EXT" > "$MENU_EXT.tmp"
-mv "$MENU_EXT.tmp" "$MENU_EXT"
+' "$MENU_EXT" > "$work"
+
+menu_txn_commit "$MENU_EXT" "$work"
+trap - EXIT
 echo "Added '$MENU_ENTRY_ID' to $MENU_EXT"
 
 omarchy menu refresh >/dev/null 2>&1 || true

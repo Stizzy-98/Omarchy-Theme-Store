@@ -4,6 +4,7 @@
   "name": "Omarchy Theme Store",
   "version": "0.1.0",
   "author": "stizzy98",
+  "license": "GPL-3.0-only",
   "description": "Browse omarchy.org/themes as a fullscreen gallery and install a theme all from within the terminal",
   "kinds": [
     "overlay"

@@ -21,6 +21,13 @@ Item {
   readonly property string pluginDir: Quickshell.env("HOME") + "/.config/omarchy/plugins/community.theme-store"
   function scriptPath(name) { return root.pluginDir + "/bin/" + name }
 
+  // Only paths under here are ever handed to an Image element — this is
+  // the verified cache directory bin/omarchy-theme-store-fetch writes to.
+  readonly property string thumbsDirPrefix: Quickshell.env("HOME") + "/.cache/omarchy/theme-store/thumbs/"
+  function safeThumbUrl(path) {
+    return (path && ThemeStoreModel.isSafeThumbnailPath(path, root.thumbsDirPrefix)) ? Util.fileUrl(path) : ""
+  }
+
   property bool opened: false
   property string view: "gallery" // "gallery" | "detail"
   property var catalog: []
@@ -33,6 +40,10 @@ Item {
   property string detailFocus: "back" // "back" | "install" — which detail-view button is current
 
   property var filteredCatalog: ThemeStoreModel.filterCatalog(root.catalog, root.filterText)
+  // Authoritative install gate: repoUrl is scraped from a page this plugin
+  // doesn't control, so nothing reaches the theme installer without first
+  // matching a strict https://github.com/<owner>/<repo> allowlist.
+  readonly property bool selectedRepoValid: root.selectedTheme ? ThemeStoreModel.isInstallableRepo(root.selectedTheme.repoUrl) : false
 
   property color background: Color.menu.background
   property color foreground: Color.menu.text
@@ -88,6 +99,7 @@ Item {
     if (force) args.push("--force")
     fetchProc.command = args
     fetchProc.running = true
+    fetchDeadline.restart()
   }
 
   function openDetail(index) {
@@ -105,7 +117,7 @@ Item {
   }
 
   function installSelected() {
-    if (!root.selectedTheme || !root.selectedTheme.repoUrl) return
+    if (!root.selectedTheme || !root.selectedRepoValid) return
     Util.execArgv([
       "omarchy-launch-floating-terminal-with-presentation",
       "omarchy-theme-install",
@@ -114,12 +126,33 @@ Item {
     root.dismiss()
   }
 
+  // Whole-process deadline: the fetch helper enforces its own internal
+  // budget, but this is the backstop that guarantees the shell never waits
+  // on it forever if it hangs (e.g. a stalled connection past its own
+  // per-request timeout).
+  Timer {
+    id: fetchDeadline
+    interval: 60000
+    repeat: false
+    onTriggered: {
+      if (fetchProc.running) {
+        fetchProc.signal(9)
+        root.loading = false
+        if (!root.catalogLoaded) root.errorText = "Timed out loading themes from omarchy.org."
+      }
+    }
+  }
+
   Process {
     id: fetchProc
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        var parsed = ThemeStoreModel.parseCatalogJson(text)
+        fetchDeadline.stop()
+        // Defense in depth: even though the producer bounds its own output,
+        // an absurdly large payload is rejected here before it is ever
+        // handed to JSON.parse.
+        var parsed = text.length <= 8 * 1024 * 1024 ? ThemeStoreModel.parseCatalogJson(text) : []
         root.loading = false
         if (parsed.length > 0) {
           root.catalog = parsed
@@ -184,6 +217,7 @@ Item {
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
             text: root.view === "gallery" ? "Omarchy Theme Store" : (root.selectedTheme ? root.selectedTheme.name : "")
+            textFormat: Text.PlainText
             color: root.foreground
             font.family: Style.font.family
             font.pixelSize: Style.font.title
@@ -297,7 +331,7 @@ Item {
 
                     Image {
                       anchors.fill: parent
-                      source: cell.modelData.thumbnailPath ? Util.fileUrl(cell.modelData.thumbnailPath) : ""
+                      source: root.safeThumbUrl(cell.modelData.thumbnailPath)
                       fillMode: Image.PreserveAspectCrop
                       asynchronous: true
                       cache: true
@@ -309,6 +343,7 @@ Item {
                     id: nameLabel
                     width: parent.width
                     text: cell.modelData.name || ""
+                    textFormat: Text.PlainText
                     color: root.foreground
                     font.family: Style.font.family
                     font.pixelSize: Style.font.body
@@ -365,7 +400,7 @@ Item {
 
             Image {
               anchors.fill: parent
-              source: root.selectedTheme && root.selectedTheme.thumbnailPath ? Util.fileUrl(root.selectedTheme.thumbnailPath) : ""
+              source: root.selectedTheme ? root.safeThumbUrl(root.selectedTheme.thumbnailPath) : ""
               fillMode: Image.PreserveAspectFit
               asynchronous: true
               cache: true
@@ -384,6 +419,7 @@ Item {
               if (owner) return "by " + owner
               return root.selectedTheme ? root.selectedTheme.repoUrl : ""
             }
+            textFormat: Text.PlainText
             color: Util.alpha(root.foreground, 0.7)
             font.family: Style.font.family
             font.pixelSize: Style.font.bodySmall
@@ -439,6 +475,7 @@ Item {
                 anchors.centerIn: parent
                 text: "Install"
                 bordered: true
+                enabled: root.selectedRepoValid
                 onClicked: root.installSelected()
               }
             }

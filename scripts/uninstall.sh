@@ -4,9 +4,14 @@
 # catalog/thumbnails in ~/.cache/omarchy/theme-store — pass --purge-cache too.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../bin/theme-store-menu-txn.sh
+source "$SCRIPT_DIR/../bin/theme-store-menu-txn.sh"
+
 PLUGIN_ID="community.theme-store"
 PLUGIN_LINK="$HOME/.config/omarchy/plugins/$PLUGIN_ID"
-MENU_EXT="$HOME/.config/omarchy/extensions/omarchy-menu.jsonc"
+MENU_DIR="$HOME/.config/omarchy/extensions"
+MENU_EXT="$MENU_DIR/omarchy-menu.jsonc"
 MENU_ENTRY_ID="install.theme-store"
 CACHE_DIR="$HOME/.cache/omarchy/theme-store"
 
@@ -20,10 +25,15 @@ else
   echo "$PLUGIN_LINK not found (already removed?)"
 fi
 
-if [[ -f $MENU_EXT ]] && grep -q "\"$MENU_ENTRY_ID\"" "$MENU_EXT"; then
-  grep -v "\"$MENU_ENTRY_ID\"" "$MENU_EXT" > "$MENU_EXT.tmp"
-  mv "$MENU_EXT.tmp" "$MENU_EXT"
-  echo "Removed '$MENU_ENTRY_ID' from $MENU_EXT"
+if menu_txn_dir_guard "$MENU_DIR" && menu_txn_file_guard "$MENU_EXT" &&
+  [[ -f $MENU_EXT ]] && grep -qF "\"$MENU_ENTRY_ID\"" "$MENU_EXT"; then
+  work=$(menu_txn_new_tmp "$MENU_DIR")
+  trap 'rm -f "$work"' EXIT
+  grep -vF "\"$MENU_ENTRY_ID\"" "$MENU_EXT" > "$work"
+  if menu_txn_commit "$MENU_EXT" "$work"; then
+    echo "Removed '$MENU_ENTRY_ID' from $MENU_EXT"
+  fi
+  trap - EXIT
 fi
 
 if command -v omarchy-shell >/dev/null 2>&1; then
