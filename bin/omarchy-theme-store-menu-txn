@@ -1,0 +1,151 @@
+#!/usr/bin/env python3
+"""Transactionally add/remove this plugin's row in the user's menu
+extensions file (~/.config/omarchy/extensions/omarchy-menu.jsonc).
+
+Everything from opening the extensions directory through the final atomic
+replace happens through ONE held, verified directory descriptor (see
+theme_store_fsutil.VerifiedDir) under an exclusive lock -- never a
+check-then-open-by-path sequence -- so nothing else on the box can swap a
+component out from under this transaction. The target file is read exactly
+once, in full, through that same descriptor; the backup and the final
+replacement are both written to an exclusively-created, unpredictable leaf
+name and only then renamed into place, so a bad transaction never corrupts
+what was there before.
+
+Usage:
+  omarchy-theme-store-menu-txn add-entry
+  omarchy-theme-store-menu-txn remove-entry
+"""
+
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import theme_store_fsutil as fsutil  # noqa: E402
+
+PLUGIN_ID = "community.theme-store"
+MENU_ENTRY_ID = "install.theme-store"
+MENU_FILE = "omarchy-menu.jsonc"
+MENU_MAX_BYTES = 1024 * 1024
+DEFAULT_CONTENT = "{\n}\n"
+
+
+def fail(msg):
+    print(f"omarchy-theme-store-menu-txn: {msg}", file=sys.stderr)
+
+
+def entry_json_fragment():
+    # The `when` guard is what makes this self-cleaning even though the
+    # platform has no uninstall hook to call back into: it self-hides (and
+    # the summon action becomes a no-op) the instant the plugin folder is
+    # gone, e.g. after `omarchy plugin remove`.
+    when_guard = f'[[ -d "$HOME/.config/omarchy/plugins/{PLUGIN_ID}" ]]'
+    action = f"omarchy-shell shell summon {PLUGIN_ID} '{{}}'"
+    value = {
+        "icon": "󰸌",
+        "label": "Omarchy Theme Store",
+        "when": when_guard,
+        "action": action,
+    }
+    # json.dumps owns all escaping here -- the embedded quotes in `when`,
+    # the braces in `action` -- in one process, with no second layer of
+    # shell/awk re-interpretation for the string to survive. ensure_ascii
+    # is off so the icon glyph is written as a literal UTF-8 character,
+    # matching the style of every other entry in this file, rather than
+    # a \uXXXX surrogate-pair escape.
+    return f'  "{MENU_ENTRY_ID}": {json.dumps(value, ensure_ascii=False)},'
+
+
+def insert_entry(text, fragment):
+    lines = text.splitlines()
+    if not lines:
+        lines = ["{", "}"]
+
+    last_idx = len(lines) - 1
+    while last_idx >= 0 and lines[last_idx].strip() == "":
+        last_idx -= 1
+    if last_idx < 0:
+        lines = ["{", "}"]
+        last_idx = 1
+
+    # Whatever member line preceded the closing brace needs a trailing
+    # comma if it doesn't already have one, so the new entry doesn't end
+    # up back-to-back with it with no separator.
+    prev_idx = last_idx - 1
+    while prev_idx >= 0 and lines[prev_idx].strip() == "":
+        prev_idx -= 1
+    if prev_idx >= 0:
+        prev_stripped = lines[prev_idx].rstrip()
+        if not prev_stripped.endswith("{") and not prev_stripped.endswith(","):
+            lines[prev_idx] = lines[prev_idx].rstrip() + ","
+
+    lines.insert(last_idx, fragment)
+    return "\n".join(lines) + "\n"
+
+
+def remove_entry(text):
+    marker = f'"{MENU_ENTRY_ID}"'
+    lines = text.splitlines()
+    kept = [ln for ln in lines if marker not in ln]
+    if len(kept) == len(lines):
+        return None
+    return "\n".join(kept) + "\n"
+
+
+def main():
+    if len(sys.argv) != 2 or sys.argv[1] not in ("add-entry", "remove-entry"):
+        print("usage: omarchy-theme-store-menu-txn <add-entry|remove-entry>", file=sys.stderr)
+        return 2
+    action = sys.argv[1]
+
+    try:
+        home = fsutil.home_dir()
+        ext_dir = home.component(".config").component("omarchy").component("extensions")
+        ext_dir.lock()  # held for the whole read-compose-validate-backup-replace
+    except (RuntimeError, OSError) as exc:
+        fail(str(exc))
+        return 1
+
+    existing_stat = ext_dir.stat_leaf(MENU_FILE)
+    if existing_stat is not None:
+        original_bytes = ext_dir.read_leaf(MENU_FILE, MENU_MAX_BYTES)
+        if original_bytes is None:
+            fail(
+                "refusing to edit: existing menu extensions file failed safety "
+                "checks (symlink, wrong owner, non-regular, or larger than expected)"
+            )
+            return 1
+        original_text = original_bytes.decode("utf-8", "replace")
+    else:
+        original_text = DEFAULT_CONTENT
+
+    marker = f'"{MENU_ENTRY_ID}"'
+    if action == "add-entry":
+        if marker in original_text:
+            print("unchanged")
+            return 0
+        new_text = insert_entry(original_text, entry_json_fragment())
+    else:
+        if marker not in original_text:
+            print("unchanged")
+            return 0
+        new_text = remove_entry(original_text)
+
+    if not fsutil.is_valid_jsonc(new_text):
+        fail("generated menu file failed validation; leaving existing file unchanged")
+        return 1
+
+    if existing_stat is not None:
+        # Preserve the prior valid file as a backup before replacing it --
+        # via the same held descriptor and an exclusive randomized leaf,
+        # never a path-based `cp` of the live file.
+        ext_dir.write_leaf_atomic("omarchy-menu.jsonc.bak", original_text.encode("utf-8"))
+
+    ext_dir.write_leaf_atomic(MENU_FILE, new_text.encode("utf-8"))
+    print("added" if action == "add-entry" else "removed")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

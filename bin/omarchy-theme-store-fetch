@@ -9,37 +9,36 @@ is passed. If a refresh fails but a cache exists (even stale), the stale
 cache is served rather than leaving the caller with nothing.
 
 Everything below the source page is untrusted: the HTML, the thumbnail
-bytes, and the on-disk cache are all bounded, host-restricted, and read
-through verified, non-symlinked paths, because this output feeds directly
-into a long-lived QML process (see ThemeStore.qml / ThemeStoreModel.js).
+bytes, and the on-disk cache are all bounded, host-restricted, and reached
+only through a held, verified directory descriptor (see
+theme_store_fsutil.VerifiedDir), because this output feeds directly into a
+long-lived QML process (see ThemeStore.qml / ThemeStoreModel.js).
 """
 
-import errno
 import html
 import json
 import os
 import re
 import sys
-import tempfile
 import time
 import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import theme_store_fsutil as fsutil  # noqa: E402
+
 SOURCE_URL = "https://omarchy.org/themes/"
 SOURCE_ORIGIN = "https://omarchy.org"
 ALLOWED_HOST = "omarchy.org"
-CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "omarchy", "theme-store")
-THUMB_DIR = os.path.join(CACHE_DIR, "thumbs")
-CATALOG_PATH = os.path.join(CACHE_DIR, "catalog.json")
 TTL_SECONDS = int(os.environ.get("OMARCHY_THEME_STORE_TTL", 24 * 60 * 60))
 USER_AGENT = "omarchy-theme-store/0.1 (+https://github.com/stizzy-98/Omarchy-Theme-Store)"
 
 # ---- bounds -----------------------------------------------------------
 # Every one of these exists because the data on the other side of the
 # fetch is not trusted: a compromised or misbehaving source page should
-# degrade this plugin, never let it hang, exhaust memory, or hand the
-# QML host something unbounded.
+# degrade this plugin, never let it hang, exhaust memory or disk, or hand
+# the QML host something unbounded.
 MAX_PAGE_BYTES = 5 * 1024 * 1024       # catalog HTML page
 MAX_THUMB_BYTES = 2 * 1024 * 1024      # a single thumbnail
 MAX_CACHE_FILE_BYTES = 8 * 1024 * 1024  # our own catalog.json cache file
@@ -49,6 +48,7 @@ MAX_REDIRECTS = 5
 MAX_IMAGE_DIMENSION = 4096             # per-axis pixel cap
 MAX_IMAGE_PIXELS = 4096 * 4096
 MAX_TOTAL_SECONDS = 45                 # whole-run deadline for refresh()
+MAX_THUMB_CACHE_BUDGET_BYTES = 64 * 1024 * 1024  # total on-disk thumb budget
 REQUEST_TIMEOUT = 15
 
 _deadline = None
@@ -62,57 +62,6 @@ def time_left():
     if _deadline is None:
         return REQUEST_TIMEOUT
     return max(0.5, _deadline - time.monotonic())
-
-
-# ---- verified, non-symlinked cache directories -------------------------
-
-def ensure_verified_dir(path):
-    """Create/verify a private directory this process fully controls.
-
-    Refuses to proceed if the path exists but is a symlink or not a
-    directory, rather than silently following it somewhere unexpected.
-    """
-    try:
-        os.makedirs(path, mode=0o700, exist_ok=True)
-    except OSError as exc:
-        if exc.errno != errno.EEXIST:
-            raise
-    if not os.path.isdir(path) or os.path.islink(path):
-        raise RuntimeError(f"refusing to use non-directory/symlinked cache path: {path}")
-    return path
-
-
-def open_nofollow_bounded(path, max_bytes):
-    """Open a regular file for reading without following a symlink, and
-    read at most max_bytes+1 (so callers can detect truncation)."""
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(path, flags)
-    try:
-        st = os.fstat(fd)
-        if not os.path.stat.S_ISREG(st.st_mode):
-            raise RuntimeError(f"refusing to read non-regular file: {path}")
-        with os.fdopen(fd, "rb") as f:
-            fd = None
-            return f.read(max_bytes + 1)
-    finally:
-        if fd is not None:
-            os.close(fd)
-
-
-def atomic_write_bytes(dest_dir, dest_name, data):
-    """Write data into dest_dir/dest_name via an unpredictable temp name
-    and an exclusive create, then atomically rename it into place."""
-    fd, tmp_path = tempfile.mkstemp(prefix=".tmp-", dir=dest_dir)
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
-        os.replace(tmp_path, os.path.join(dest_dir, dest_name))
-    except BaseException:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
 
 
 # ---- bounded, host-restricted HTTP fetch -------------------------------
@@ -269,10 +218,6 @@ FIGURE_RE = re.compile(
 )
 
 SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
-REPO_URL_RE = re.compile(
-    r"^https://github\.com/[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})"
-    r"/[A-Za-z0-9._-]{1,100}(?:\.git)?/?$"
-)
 
 
 def clip(s, max_len=MAX_FIELD_LEN):
@@ -312,20 +257,26 @@ def parse_catalog(page_html):
     return entries
 
 
-def ensure_thumbnail(entry):
+def ensure_thumbnail(thumb_dir, thumb_dir_path, entry, budget):
+    """Returns an absolute path string for a validated, cached thumbnail,
+    or "" if none is available. `budget` is a single-element list used as
+    a mutable int (bytes already spent against MAX_THUMB_CACHE_BUDGET_BYTES
+    this run) -- every write, cache-hit or fresh, is charged against it."""
     slug = entry["slug"]
     ext = os.path.splitext(urlsplit(entry["thumbnailUrl"]).path)[1].lower()
     if ext not in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
         ext = ".img"
     dest_name = slug + ext
-    dest = os.path.join(THUMB_DIR, dest_name)
+    dest_path = os.path.join(thumb_dir_path, dest_name)
 
-    # Path containment: dest must resolve inside the verified thumbs dir.
-    if os.path.dirname(os.path.realpath(dest)) != os.path.realpath(THUMB_DIR):
-        return ""
-
-    if os.path.exists(dest) and not os.path.islink(dest):
-        return dest
+    # Re-validate any existing cached leaf through the exact same bounded,
+    # no-follow, owned-by-us, image-sniffed path as a fresh download --
+    # a leaf already sitting there is never trusted just because a
+    # filename happens to match.
+    existing = thumb_dir.read_leaf(dest_name, MAX_THUMB_BYTES)
+    if existing is not None and is_safe_image(existing):
+        budget[0] += len(existing)
+        return dest_path
 
     if time_left() <= 1:
         # Global deadline reached: stop fetching more thumbnails rather
@@ -337,45 +288,47 @@ def ensure_thumbnail(entry):
         if not is_safe_image(data):
             print(f"warn: rejected thumbnail for {slug} (unrecognized/oversized image)", file=sys.stderr)
             return ""
-        atomic_write_bytes(THUMB_DIR, dest_name, data)
-        return dest
+        if budget[0] + len(data) > MAX_THUMB_CACHE_BUDGET_BYTES:
+            print(f"warn: thumbnail cache budget exhausted; skipping {slug}", file=sys.stderr)
+            return ""
+        thumb_dir.write_leaf_atomic(dest_name, data)
+        budget[0] += len(data)
+        return dest_path
     except (urllib.error.URLError, ValueError, OSError) as exc:
         print(f"warn: failed to cache thumbnail for {slug}: {exc}", file=sys.stderr)
         return ""
 
 
-def refresh():
+def refresh(cache_dir, cache_dir_path, thumb_dir, thumb_dir_path):
     global _deadline
     _deadline = time.monotonic() + MAX_TOTAL_SECONDS
-
-    ensure_verified_dir(CACHE_DIR)
-    ensure_verified_dir(THUMB_DIR)
 
     page = fetch_bounded(SOURCE_URL, MAX_PAGE_BYTES).decode("utf-8", "replace")
     entries = parse_catalog(page)
     if not entries:
         raise RuntimeError("no themes parsed from omarchy.org/themes/ (page layout may have changed)")
 
+    budget = [thumb_dir.total_regular_bytes()]
     catalog = []
     for entry in entries:
         catalog.append({
             "slug": entry["slug"],
             "name": entry["name"],
             "repoUrl": entry["repoUrl"],
-            "thumbnailPath": ensure_thumbnail(entry),
+            "thumbnailPath": ensure_thumbnail(thumb_dir, thumb_dir_path, entry, budget),
         })
 
     catalog.sort(key=lambda t: t["name"].lower())
 
     payload = json.dumps({"fetchedAt": int(time.time()), "themes": catalog}).encode("utf-8")
-    atomic_write_bytes(CACHE_DIR, "catalog.json", payload)
+    cache_dir.write_leaf_atomic("catalog.json", payload)
     return catalog
 
 
-def load_cached():
-    data = open_nofollow_bounded(CATALOG_PATH, MAX_CACHE_FILE_BYTES)
-    if len(data) > MAX_CACHE_FILE_BYTES:
-        raise ValueError("cached catalog exceeds size limit")
+def load_cached(cache_dir):
+    data = cache_dir.read_leaf("catalog.json", MAX_CACHE_FILE_BYTES)
+    if data is None:
+        raise ValueError("no usable cached catalog")
     parsed = json.loads(data.decode("utf-8"))
     themes = parsed.get("themes", [])
     if not isinstance(themes, list):
@@ -385,11 +338,20 @@ def load_cached():
 
 def main():
     force = "--force" in sys.argv[1:]
-    ensure_verified_dir(CACHE_DIR)
 
-    if not force and os.path.exists(CATALOG_PATH):
+    home = fsutil.home_dir()
+    cache_dir = home.component(".cache").component("omarchy").component("theme-store")
+    thumb_dir = cache_dir.component("thumbs")
+    cache_dir_path = os.path.join(os.path.expanduser("~"), ".cache", "omarchy", "theme-store")
+    thumb_dir_path = os.path.join(cache_dir_path, "thumbs")
+
+    # Serializes concurrent invocations (e.g. two overlay opens racing a
+    # refresh) against the same cache -- held for the rest of the process.
+    cache_dir.lock()
+
+    if not force:
         try:
-            themes, fetched_at = load_cached()
+            themes, fetched_at = load_cached(cache_dir)
             if themes and (time.time() - fetched_at) < TTL_SECONDS:
                 print(json.dumps(themes))
                 return
@@ -397,16 +359,15 @@ def main():
             pass
 
     try:
-        themes = refresh()
+        themes = refresh(cache_dir, cache_dir_path, thumb_dir, thumb_dir_path)
     except Exception as exc:
-        if os.path.exists(CATALOG_PATH):
-            try:
-                themes, _ = load_cached()
-                print(f"warn: refresh failed ({exc}); serving cached catalog", file=sys.stderr)
-                print(json.dumps(themes))
-                return
-            except (OSError, ValueError):
-                pass
+        try:
+            themes, _ = load_cached(cache_dir)
+            print(f"warn: refresh failed ({exc}); serving cached catalog", file=sys.stderr)
+            print(json.dumps(themes))
+            return
+        except (OSError, ValueError):
+            pass
         fail(str(exc))
         print("[]")
         sys.exit(1)

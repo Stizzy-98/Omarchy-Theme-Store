@@ -5,14 +5,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=../bin/theme-store-menu-txn.sh
-source "$SCRIPT_DIR/../bin/theme-store-menu-txn.sh"
 
 PLUGIN_ID="community.theme-store"
 PLUGIN_LINK="$HOME/.config/omarchy/plugins/$PLUGIN_ID"
-MENU_DIR="$HOME/.config/omarchy/extensions"
-MENU_EXT="$MENU_DIR/omarchy-menu.jsonc"
-MENU_ENTRY_ID="install.theme-store"
 CACHE_DIR="$HOME/.cache/omarchy/theme-store"
 
 if [[ -L $PLUGIN_LINK ]]; then
@@ -25,15 +20,10 @@ else
   echo "$PLUGIN_LINK not found (already removed?)"
 fi
 
-if menu_txn_dir_guard "$MENU_DIR" && menu_txn_file_guard "$MENU_EXT" &&
-  [[ -f $MENU_EXT ]] && grep -qF "\"$MENU_ENTRY_ID\"" "$MENU_EXT"; then
-  work=$(menu_txn_new_tmp "$MENU_DIR")
-  trap 'rm -f "$work"' EXIT
-  grep -vF "\"$MENU_ENTRY_ID\"" "$MENU_EXT" > "$work"
-  if menu_txn_commit "$MENU_EXT" "$work"; then
-    echo "Removed '$MENU_ENTRY_ID' from $MENU_EXT"
-  fi
-  trap - EXIT
+# Same descriptor-safe, validated, backed-up transaction as the install-time
+# add — see omarchy-theme-store-menu-txn.
+if python3 "$SCRIPT_DIR/../bin/omarchy-theme-store-menu-txn" remove-entry | grep -qx removed; then
+  echo "Removed the menu entry."
 fi
 
 if command -v omarchy-shell >/dev/null 2>&1; then
