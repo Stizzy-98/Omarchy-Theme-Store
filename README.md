@@ -33,15 +33,17 @@ The first time it loads it registers its own "Super + Space > Install > Omarchy 
 ## Use
 - Open Omarchy Theme Store by pressing Super + Space > Install > Press Enter on Omarchy Theme Store.
 - Filter for specific theme names by typing.
-- Press ctrl + r to refresh gallery.
+- Press `CTRL + R` to refresh gallery.
 - Press `Enter` on a theme to see a full-size preview
-- Press Back or ESC to return to the main view 
+- Press `Back` or `ESC` to return to the main view 
 - Press Install to install the theme. 
 
 ## Updating
-Run: omarchy plugin update community.theme-store
+```sh
+omarchy plugin update community.theme-store
+```
 
 ## Uninstall
- ```sh
-
+```sh
 omarchy plugin remove community.theme-store
+```
