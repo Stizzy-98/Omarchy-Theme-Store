@@ -16,7 +16,7 @@ A Quickshell plugin for [Omarchy](https://omarchy.org) that turns
   (`OMARCHY_THEME_STORE_TTL` env var to change that) unless a stale cache is
   all that's available.
 - `ThemeStore.qml` / `ThemeStoreModel.js` is the plugin itself: a Quickshell `overlay'.
-- Installing a theme opens an install script the same way `omarchy-theme-install` script does. The application is then viewable by navigating to Super + Space > Install > Style > Omarchy Theme Store.
+- Installing a theme opens an install script the same way `omarchy-theme-install` script does.
 - Navigate through the themes and select one that you like press enter and then select install.
 - The theme will be installed and immediately enabled.
 
@@ -31,6 +31,7 @@ Using omarchy's own plugin installer — it clones the repo straight into
 The first time it loads it registers its own "Super + Space > Install > Omarchy Theme Store" menu entry.
 
 ## Use
+- Open Omarchy Theme Store by pressing Super + Space > Install > Press Enter on Omarchy Theme Store.
 - Filter for specific theme names by typing.
 - Press ctrl + r to refresh gallery.
 - Press `Enter` on a theme to see a full-size preview
