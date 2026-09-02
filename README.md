@@ -41,18 +41,4 @@ Run: omarchy plugin update community.theme-store
 ## Uninstall
  ```sh
 
-omarchy plugin remove community.theme-store
- ```
-
-That removes the plugin itself to remove menu entry run:
-
-```sh
-./scripts/uninstall.sh          # remove the leftover menu entry
-./scripts/uninstall.sh --purge-cache   # also delete the cached catalog/thumbnails
-```
-
-## Using only CLI instead of the Menu:
-
-```sh
-omarchy-shell shell summon community.theme-store '{}'
-```
+omarchy plugin remove community.theme-store --yes
