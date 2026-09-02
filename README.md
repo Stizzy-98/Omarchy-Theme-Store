@@ -4,7 +4,9 @@
 
 ## Overview
 A Quickshell plugin for [Omarchy](https://omarchy.org) that turns
-[omarchy.org/themes](https://omarchy.org/themes/) into a gallery to remove all the annoying extra steps that go into installing themes in Omarchy. One simple interface to view all available themes right in the install menu that then also runs the install script so that you don't need to run omarchy-theme-install. 
+[omarchy.org/themes](https://omarchy.org/themes/) into a gallery to remove all the annoying extra steps that go into installing themes in Omarchy. One simple interface to view all available themes in a gallery view. Selecting a theme presents you with a closer look and a 'back' and 'install' button. Selecting Install then automates the install script so that you don't need to run omarchy-theme-install manually in terminal. 
+
+![Alt Text](https://raw.githubusercontent.com/Stizzy-98/Omarchy-Theme-Store/main/images/Theme_View.png)
 
 ## How it works
 
