@@ -34,7 +34,7 @@ The first time it loads it registers its own "Super + Space > Install > Omarchy 
 - Filter for specific theme names by typing.
 - Press ctrl + r to refresh gallery.
 - Press `Enter` on a theme to see a full-size preview
-- Press Back to return to the main view 
+- Press Back or ESC to return to the main view 
 - Press Install to install the theme. 
 
 ## Updating
