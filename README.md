@@ -41,4 +41,4 @@ Run: omarchy plugin update community.theme-store
 ## Uninstall
  ```sh
 
-omarchy plugin remove community.theme-store --yes
+omarchy plugin remove community.theme-store
